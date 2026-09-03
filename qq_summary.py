@@ -21,7 +21,21 @@ import requests
 
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = APP_DIR / "config.json"
-DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_PROVIDER = "deepseek"
+PROVIDERS = {
+    "deepseek": {
+        "label": "DeepSeek 官方",
+        "endpoint": "https://api.deepseek.com/v1/chat/completions",
+        "default_model": "deepseek-v4-flash",
+    },
+    "nvidia": {
+        "label": "NVIDIA API Catalog",
+        "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+        "default_model": "deepseek-ai/deepseek-v4-pro-0813",
+    },
+}
+# 保留旧常量，避免已有调用方失效。
+DEFAULT_MODEL = PROVIDERS[DEFAULT_PROVIDER]["default_model"]
 SUMMARY_CHUNK_CHARS = 18000
 
 
@@ -353,15 +367,38 @@ def _split_chunks(items: Iterable[str], max_chars: int = SUMMARY_CHUNK_CHARS) ->
     return chunks
 
 
-def _deepseek_chat(api_key: str, prompt: str, max_tokens: int = 2200) -> str:
+def provider_label(provider: str) -> str:
+    config = PROVIDERS.get(provider)
+    return str(config["label"]) if config else provider
+
+
+def provider_default_model(provider: str) -> str:
+    config = PROVIDERS.get(provider)
+    if not config:
+        raise QQSummaryError(f"不支持的 AI 服务商：{provider}")
+    return str(config["default_model"])
+
+
+def _chat_completion(
+    api_key: str,
+    prompt: str,
+    max_tokens: int = 2200,
+    provider: str = DEFAULT_PROVIDER,
+    model: str | None = None,
+) -> str:
+    provider_config = PROVIDERS.get(provider)
+    if not provider_config:
+        raise QQSummaryError(f"不支持的 AI 服务商：{provider}")
+    label = str(provider_config["label"])
     if not api_key.strip():
-        raise QQSummaryError("请先填写 DeepSeek API Key。")
+        raise QQSummaryError(f"请先填写 {label} API Key。")
+    selected_model = (model or "").strip() or str(provider_config["default_model"])
     try:
         response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            str(provider_config["endpoint"]),
             headers={"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"},
             json={
-                "model": DEFAULT_MODEL,
+                "model": selected_model,
                 "messages": [
                     {"role": "system", "content": "你擅长准确提炼群聊，绝不混淆发言人。"},
                     {"role": "user", "content": prompt},
@@ -372,24 +409,45 @@ def _deepseek_chat(api_key: str, prompt: str, max_tokens: int = 2200) -> str:
             timeout=90,
         )
     except requests.RequestException as exc:
-        raise QQSummaryError(f"连接 DeepSeek API 失败：{exc}") from exc
+        raise QQSummaryError(f"连接 {label} API 失败：{exc}") from exc
 
-    error_messages = {
-        400: "DeepSeek 请求格式错误，请更新工具后重试。",
-        401: "DeepSeek API Key 无效，请检查是否复制完整。",
-        402: "DeepSeek API 余额不足，请充值或更换有余额的 API Key。",
-        422: "DeepSeek 请求参数不兼容，请更新工具后重试。",
-        429: "DeepSeek 请求过于频繁，请稍后再试。",
-        500: "DeepSeek 服务暂时异常，请稍后再试。",
-        503: "DeepSeek 当前繁忙，请稍后再试。",
-    }
+    if provider == "nvidia":
+        error_messages = {
+            400: "NVIDIA 请求格式错误，请检查模型名是否正确。",
+            401: "NVIDIA API Key 无效，请在 API Catalog 重新生成并完整复制。",
+            402: "NVIDIA API 免费额度或试用权益不可用，请检查账号状态。",
+            403: "NVIDIA 拒绝了请求，当前 Key 可能没有该模型的访问权限。",
+            404: "NVIDIA 没有找到该模型，请从模型页重新复制模型名。",
+            422: "NVIDIA 不接受当前请求参数，请检查模型名。",
+            429: "NVIDIA 免费接口达到频率或额度限制，请稍后再试。",
+            500: "NVIDIA 服务暂时异常，请稍后再试。",
+            503: "NVIDIA 当前繁忙，请稍后再试。",
+        }
+    else:
+        error_messages = {
+            400: "DeepSeek 请求格式错误，请更新工具后重试。",
+            401: "DeepSeek API Key 无效，请检查是否复制完整。",
+            402: "DeepSeek API 余额不足，请充值或更换有余额的 API Key。",
+            422: "DeepSeek 请求参数不兼容，请更新工具后重试。",
+            429: "DeepSeek 请求过于频繁，请稍后再试。",
+            500: "DeepSeek 服务暂时异常，请稍后再试。",
+            503: "DeepSeek 当前繁忙，请稍后再试。",
+        }
     if response.status_code in error_messages:
         raise QQSummaryError(error_messages[response.status_code])
     try:
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        content = response.json()["choices"][0]["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("响应中没有文本内容")
+        return content
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
-        raise QQSummaryError(f"DeepSeek 返回了无法识别的响应：{exc}") from exc
+        raise QQSummaryError(f"{label} 返回了无法识别的响应：{exc}") from exc
+
+
+def _deepseek_chat(api_key: str, prompt: str, max_tokens: int = 2200) -> str:
+    """向后兼容的 DeepSeek 调用入口。"""
+    return _chat_completion(api_key, prompt, max_tokens=max_tokens, provider="deepseek")
 
 
 def _markdown_table_to_text(lines: list[str]) -> list[str]:
@@ -435,6 +493,8 @@ def ai_summarize(
     date_range: str,
     prompt_template: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    provider: str = DEFAULT_PROVIDER,
+    model: str | None = None,
 ) -> str:
     if not messages:
         return "该时间段内没有文本消息。"
@@ -453,27 +513,33 @@ def ai_summarize(
 
     chunks = _split_chunks(messages)
     if len(chunks) == 1:
-        notify("正在生成 AI 总结...")
+        notify(f"正在通过 {provider_label(provider)} 生成 AI 总结...")
         prompt = template.format(date_range=date_range, count=len(messages), messages=chunks[0])
-        return to_plain_text(_deepseek_chat(api_key, prompt))
+        return to_plain_text(
+            _chat_completion(api_key, prompt, provider=provider, model=model)
+        )
 
     partials = []
     for index, chunk in enumerate(chunks, start=1):
         notify(f"正在提炼第 {index}/{len(chunks)} 段聊天记录...")
         partials.append(
-            _deepseek_chat(
+            _chat_completion(
                 api_key,
                 "每行格式为“[时间] 发送者：正文”。请提炼下面这段 QQ 群聊的核心话题、事实和待办，"
                 "保留已经明确对应的发送者；被提及或引用的人不是当前发言人，证据不足就不要署名。\n\n"
                 + chunk,
                 max_tokens=1400,
+                provider=provider,
+                model=model,
             )
         )
 
     notify("正在合并分段摘要...")
     merged = "以下是完整聊天记录的分段提炼结果，请去重并综合：\n\n" + "\n\n".join(partials)
     prompt = template.format(date_range=date_range, count=len(messages), messages=merged)
-    return to_plain_text(_deepseek_chat(api_key, prompt))
+    return to_plain_text(
+        _chat_completion(api_key, prompt, provider=provider, model=model)
+    )
 
 
 def load_config() -> dict:

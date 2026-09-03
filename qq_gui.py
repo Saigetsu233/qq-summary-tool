@@ -17,13 +17,17 @@ except ImportError as exc:
 from qq_summary import (
     APP_DIR,
     AliasBook,
+    DEFAULT_PROVIDER,
     DEFAULT_PROMPT_TEMPLATE,
     GroupInfo,
+    PROVIDERS,
     QQExportDatabase,
     QQSummaryError,
     ai_summarize,
     find_running_nt_msg_databases,
     load_config,
+    provider_default_model,
+    provider_label,
     save_config,
 )
 
@@ -32,17 +36,38 @@ class QQSummaryApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("QQ 群聊 AI 总结工具")
-        self.root.geometry("820x820")
-        self.root.minsize(700, 720)
+        self.root.geometry("850x880")
+        self.root.minsize(720, 780)
 
         self.database: QQExportDatabase | None = None
         self.groups: list[GroupInfo] = []
         self.config = load_config()
         self.prompt_template = self.config.get("prompt_template") or DEFAULT_PROMPT_TEMPLATE
 
+        configured_provider = str(self.config.get("provider") or DEFAULT_PROVIDER)
+        if configured_provider not in PROVIDERS:
+            configured_provider = DEFAULT_PROVIDER
+        stored_keys = self.config.get("api_keys")
+        self.provider_keys = dict(stored_keys) if isinstance(stored_keys, dict) else {}
+        # 自动迁移旧版单个 DeepSeek Key 配置。
+        if self.config.get("api_key") and not self.provider_keys.get("deepseek"):
+            self.provider_keys["deepseek"] = str(self.config["api_key"])
+        stored_models = self.config.get("models")
+        self.provider_models = dict(stored_models) if isinstance(stored_models, dict) else {}
+        self.current_provider = configured_provider
+
         self.db_path_var = tk.StringVar(value="尚未选择 nt_msg_export.db")
         self.group_var = tk.StringVar()
-        self.api_key_var = tk.StringVar(value=self.config.get("api_key", ""))
+        self.provider_var = tk.StringVar(value=provider_label(configured_provider))
+        self.api_key_var = tk.StringVar(
+            value=str(self.provider_keys.get(configured_provider, ""))
+        )
+        self.model_var = tk.StringVar(
+            value=str(
+                self.provider_models.get(configured_provider)
+                or provider_default_model(configured_provider)
+            )
+        )
         self.status_var = tk.StringVar(value="请选择 QQ 导出数据库")
         self.message_count_var = tk.StringVar()
         self.show_key_var = tk.BooleanVar(value=False)
@@ -123,13 +148,39 @@ class QQSummaryApp:
             side="left", padx=6
         )
 
-        api_frame = ttk.LabelFrame(self.root, text="DeepSeek API Key")
-        api_frame.pack(fill="x", padx=12, pady=6)
-        self.api_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, show="*", width=70)
-        self.api_entry.pack(side="left", fill="x", expand=True, padx=(10, 6), pady=9)
+        self.api_frame = ttk.LabelFrame(self.root, text="第四步：选择 AI 服务")
+        self.api_frame.pack(fill="x", padx=12, pady=6)
+
+        provider_row = ttk.Frame(self.api_frame)
+        provider_row.pack(fill="x", padx=10, pady=(8, 3))
+        ttk.Label(provider_row, text="服务商：").pack(side="left")
+        self.provider_combo = ttk.Combobox(
+            provider_row,
+            textvariable=self.provider_var,
+            values=[provider_label(key) for key in PROVIDERS],
+            state="readonly",
+            width=23,
+        )
+        self.provider_combo.pack(side="left", padx=(2, 14))
+        self.provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
+        ttk.Label(provider_row, text="模型：").pack(side="left")
+        ttk.Entry(provider_row, textvariable=self.model_var).pack(
+            side="left", fill="x", expand=True, padx=(2, 0)
+        )
+
+        key_row = ttk.Frame(self.api_frame)
+        key_row.pack(fill="x", padx=10, pady=(3, 2))
+        ttk.Label(key_row, text="API Key：").pack(side="left")
+        self.api_entry = ttk.Entry(key_row, textvariable=self.api_key_var, show="*")
+        self.api_entry.pack(side="left", fill="x", expand=True, padx=(2, 6))
         ttk.Checkbutton(
-            api_frame, text="显示", variable=self.show_key_var, command=self._toggle_key
-        ).pack(side="left", padx=(0, 10))
+            key_row, text="显示", variable=self.show_key_var, command=self._toggle_key
+        ).pack(side="left")
+        ttk.Label(
+            self.api_frame,
+            text="NVIDIA API Catalog 提供原型阶段免费接口，可用性、频率和额度以 NVIDIA 账号页面为准。",
+            foreground="gray",
+        ).pack(anchor="w", padx=10, pady=(2, 7))
 
         status = ttk.Label(
             self.root, textvariable=self.status_var, anchor="w", relief="sunken"
@@ -149,6 +200,26 @@ class QQSummaryApp:
 
     def _set_status(self, message: str):
         self.root.after(0, lambda: self.status_var.set(message))
+
+    def _provider_key_from_label(self, label: str) -> str:
+        for key, config in PROVIDERS.items():
+            if config["label"] == label:
+                return key
+        return DEFAULT_PROVIDER
+
+    def _remember_provider_settings(self):
+        self.provider_keys[self.current_provider] = self.api_key_var.get().strip()
+        self.provider_models[self.current_provider] = self.model_var.get().strip()
+
+    def _on_provider_changed(self, _event=None):
+        self._remember_provider_settings()
+        selected = self._provider_key_from_label(self.provider_var.get())
+        self.current_provider = selected
+        self.api_key_var.set(str(self.provider_keys.get(selected, "")))
+        self.model_var.set(
+            str(self.provider_models.get(selected) or provider_default_model(selected))
+        )
+        self.status_var.set(f"已切换到 {provider_label(selected)}")
 
     def _on_auto_find(self):
         candidates = []
@@ -241,9 +312,15 @@ class QQSummaryApp:
         if start_date > end_date:
             messagebox.showwarning("日期错误", "开始日期不能晚于结束日期。")
             return
-        api_key = self.api_key_var.get().strip()
+        self._remember_provider_settings()
+        provider = self.current_provider
+        api_key = self.provider_keys.get(provider, "").strip()
+        model = self.provider_models.get(provider, "").strip()
         if not api_key:
-            messagebox.showwarning("提示", "请先填写 DeepSeek API Key。")
+            messagebox.showwarning("提示", f"请先填写 {provider_label(provider)} API Key。")
+            return
+        if not model:
+            messagebox.showwarning("提示", "请先填写模型名。")
             return
 
         group = self.groups[index]
@@ -270,6 +347,8 @@ class QQSummaryApp:
                     date_range,
                     prompt_template=self.prompt_template,
                     progress_callback=self._set_status,
+                    provider=provider,
+                    model=model,
                 )
                 header = (
                     f"群聊：{group.display_name}\n"
@@ -353,8 +432,11 @@ class QQSummaryApp:
         ttk.Button(buttons, text="取消", command=window.destroy, width=12).pack(side="left", padx=5)
 
     def _on_close(self):
+        self._remember_provider_settings()
         config = {
-            "api_key": self.api_key_var.get().strip(),
+            "provider": self.current_provider,
+            "api_keys": self.provider_keys,
+            "models": self.provider_models,
             "prompt_template": self.prompt_template,
         }
         if self.database:

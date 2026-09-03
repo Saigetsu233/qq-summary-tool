@@ -9,6 +9,7 @@ from qq_summary import (
     AliasBook,
     QQExportDatabase,
     QQSummaryError,
+    _chat_completion,
     _deepseek_chat,
     to_plain_text,
 )
@@ -101,6 +102,39 @@ class OutputAndApiTests(unittest.TestCase):
         post.return_value = response
         with self.assertRaisesRegex(QQSummaryError, "余额不足"):
             _deepseek_chat("test-key", "test")
+
+    @mock.patch("qq_summary.requests.post")
+    def test_nvidia_uses_compatible_endpoint_and_selected_model(self, post):
+        response = mock.Mock(status_code=200)
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "choices": [{"message": {"content": "NVIDIA 总结结果"}}]
+        }
+        post.return_value = response
+
+        result = _chat_completion(
+            "nvidia-test-key",
+            "test",
+            provider="nvidia",
+            model="deepseek-ai/deepseek-v4-pro-0813",
+        )
+
+        self.assertEqual(result, "NVIDIA 总结结果")
+        _args, kwargs = post.call_args
+        self.assertEqual(
+            kwargs["json"]["model"], "deepseek-ai/deepseek-v4-pro-0813"
+        )
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+        )
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer nvidia-test-key")
+
+    @mock.patch("qq_summary.requests.post")
+    def test_nvidia_rate_limit_has_friendly_error(self, post):
+        post.return_value = mock.Mock(status_code=429)
+        with self.assertRaisesRegex(QQSummaryError, "频率或额度限制"):
+            _chat_completion("test-key", "test", provider="nvidia")
 
 
 if __name__ == "__main__":

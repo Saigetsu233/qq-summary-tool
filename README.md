@@ -13,7 +13,9 @@
 - 支持本地群名和群昵称映射，不向 AI 暴露 QQ 号
 - 长聊天自动分段总结，不截断前文
 - 输出适合 QQ 的 emoji 纯文本，自动清理 Markdown
-- 对 DeepSeek 401、402、429、500、503 等错误给出中文提示
+- 同时支持 DeepSeek 官方 API 和 NVIDIA API Catalog
+- 服务商、API Key 与模型名可在界面中切换，两套 Key 分开保存
+- 对 401、402、403、404、429、500、503 等常见 API 错误给出中文提示
 - API Key、数据库、昵称映射和总结文件默认全部 Git 忽略
 
 ## 数据准备
@@ -47,8 +49,19 @@ python qq_gui.py
 
 1. 点击“自动查找”或“选择导出数据库”。
 2. 选择群聊和日期范围。
-3. 填写自己 DeepSeek 开放平台账号创建的 API Key。
-4. 点击“生成总结”，完成后直接复制到 QQ 群。
+3. 选择“DeepSeek 官方”或“NVIDIA API Catalog”。
+4. 填写该服务商的 API Key，按需修改模型名。
+5. 点击“生成总结”，完成后直接复制到 QQ 群。
+
+## 使用 NVIDIA 免费接口
+
+1. 在 [NVIDIA API Catalog](https://build.nvidia.com/) 登录，打开一个带 **Free Endpoint** 的文本模型。
+2. 点击模型页上的 **Generate API Key** 并复制 Key。
+3. 在工具中选择“NVIDIA API Catalog”，粘贴 Key 后生成总结。
+
+默认模型为截图中的 `deepseek-ai/deepseek-v4-pro-0813`。模型名输入框可编辑；如果 NVIDIA 返回“没有找到模型”，请在当前模型页复制最新的 `model` 值。
+
+NVIDIA 页面将这类接口标为原型阶段免费端点，但免费模型、频率、额度和可用性可能变化，以 NVIDIA 账号和模型页当时显示为准。
 
 ## 昵称映射（可选）
 
@@ -83,7 +96,8 @@ Windows NTQQ 的自动密钥提取通常需要以调试器启动 QQ、设置断�
 - 工具只读打开导出数据库，不修改源文件。
 - QQ 号、UID、昵称、数据库、API Key 和总结结果均默认 Git 忽略。
 - 没有昵称映射时，发送给 AI 的只有“群友1”等匿名标签。
-- 生成总结时，所选时间范围内的文本会发送到 DeepSeek API；使用前请取得群成员同意并遵守当地法律法规。
+- 生成总结时，所选时间范围内的文本会发送到你选择的 DeepSeek 或 NVIDIA API；使用前请取得群成员同意并遵守当地法律法规。
+- API Key 仅保存在本地 `config.json`（明文），不会写入总结或提交到 Git。共用电脑上建议使用后清空 Key。
 - 不要把 `nt_msg.db`、`nt_msg_export.db`、`config.json` 或 `aliases.json` 上传到公开仓库。
 
 ## 测试
@@ -92,7 +106,7 @@ Windows NTQQ 的自动密钥提取通常需要以调试器启动 QQ、设置断�
 python -m unittest discover -s tests -v
 ```
 
-测试使用人工构造的 SQLite 数据，不包含真实 QQ 号或聊天内容，也不会调用 DeepSeek。
+测试使用人工构造的 SQLite 数据，不包含真实 QQ 号或聊天内容，也不会调用真实 AI API。
 
 ## 参考与致谢
 
