@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qq-summary-tool"
+version = "0.1.0"
+description = "Generate privacy-conscious AI daily summaries from exported NTQQ group chats."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [{ name = "Saigetsu233" }]
+dependencies = [
+  "requests>=2.31,<3",
+  "tkcalendar>=1.6,<2",
+  "psutil>=5.9,<8",
+]
+
+[project.scripts]
+qq-summary-tool = "qq_gui:main"
+
+[tool.setuptools]
+py-modules = ["qq_summary", "qq_gui"]
